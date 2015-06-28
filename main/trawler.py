@@ -1,9 +1,13 @@
+import argparse
 from time import sleep
 import urllib2
 
 from lxml.html.soupparser import fromstring, unescape
 import requests
 import simplejson
+import xlsxwriter
+import re
+
 
 def setup(existing_session_id=None):
     s = requests.Session()
@@ -46,28 +50,97 @@ def run_query(query, s):
     # Return the culture objects
     return results['owcs'].values()
 
+def hack_single_culture_result(doc):
+    # Some of the title spans have multiple classes,
+    # which confuses beautiful soup
+    return doc.replace('class="topTitle" class="italics"',
+                       'class="topTitle"')
+
 def get_paragraphs_for_culture(culture, s):
     # Each culture has a url for a page containing the paragraphs from the search
     culture_path = urllib2.unquote(unescape(culture['href']))
     single_culture_result_url = "http://ehrafworldcultures.yale.edu/ehrafe/" + culture_path
     single_culture_result = s.get(single_culture_result_url)
-    single_culture_result_dom = fromstring(single_culture_result.content)
     sleep(1)
-    # The XPATH extracts the paragraph from the downloaded page. This bit is a bit risky! The page contains
-    # very little metadata to help identify the paragraph.
-    return [paragraph.encode('utf-8')
-            for paragraph
-            in single_culture_result_dom.xpath("//div[contains(@class, 'longHit')]/span/text()")]
 
+    culture_code = re.search("[&\?]owc=([A-Z0-9]*)&",
+                             single_culture_result_url).groups()[0]
+
+    single_culture_result_doc = hack_single_culture_result(single_culture_result.content)
+
+    single_culture_result_dom = fromstring(single_culture_result_doc)
+
+    # The following XPaths extract various fields from the downloaded page. This is risky!
+    # There is litle data on the pageto help identify the paragraphs, or anything else.
+    paragraphs = []
+    author = None
+    document_title = None
+
+    table = single_culture_result_dom.xpath("//table[@id='para']")[0]
+
+    for row in table.xpath("tbody/tr"):
+        if row.get('class') == 'topAuthorRow':
+            author = "".join(row.xpath(".//span[@class='topAuthor']/text()")).strip()
+            document_title = "".join(row.xpath(".//span[@class='topTitle']/text()")).strip()
+            document_id = "".join(row.xpath(".//button/@id")).strip()
+        else:
+            text_nodes = row.xpath(".//span[@pageeid]//text()")
+            paragraph_text = "".join(text_nodes).strip()
+            page_number = "".join(row.xpath(".//span[@class='pageNo']/text()")).strip()
+            section = "".join(row.xpath(".//div[@class='secTitle']/span[@class='author']/text()")).strip()
+
+            paragraphs.append({
+                               'text': paragraph_text,
+                               'author': author,
+                               'document_title': document_title,
+                               'document_id': document_id,
+                               'page_number': page_number,
+                               'section': section,
+                               'culture': culture['cultureName'],
+                               'culture_code': culture_code
+                               })
+    return paragraphs
+
+def output_results_to_xls(paragraphs):
+    workbook = xlsxwriter.Workbook('results.xlsx')
+    worksheet = workbook.add_worksheet()
+
+    first_col = 0
+    first_row = 1
+
+    worksheet.write(0, first_col, 'HRAF Document ID')
+    worksheet.write(0, first_col + 1, 'Page')
+    worksheet.write(0, first_col + 2, 'Culture')
+    worksheet.write(0, first_col + 3, 'Culture code')
+    worksheet.write(0, first_col + 4, 'Text')
+    worksheet.write(0, first_col + 5, 'Author')
+    worksheet.write(0, first_col + 6, 'Document title')
+
+    for index, paragraph in enumerate(paragraphs):
+        worksheet.write(first_row + index, first_col, paragraph['document_id'])
+        worksheet.write(first_row + index, first_col + 1, paragraph['page_number'])
+        worksheet.write(first_row + index, first_col + 2, paragraph['culture'])
+        worksheet.write(first_row + index, first_col + 3, paragraph['culture_code'])
+        worksheet.write(first_row + index, first_col + 4, paragraph['text'])
+        worksheet.write(first_row + index, first_col + 5, paragraph['author'])
+        worksheet.write(first_row + index, first_col + 6, paragraph['document_title'])
+
+    workbook.close()
 
 def main(query, existing_session_id=None):
     s = setup(existing_session_id)
 
+    paragraphs = []
+
     for culture in run_query(query, s):
         print "CULTURE {}".format(culture['cultureName'])
-        for paragraph in get_paragraphs_for_culture(culture, s):
-            print paragraph
+        paragraphs_for_culture = get_paragraphs_for_culture(culture, s)
+        paragraphs.extend(paragraphs_for_culture)
 
+    output_results_to_xls(paragraphs)
 
 if __name__ == '__main__':
-    main("(( Cultures = ('MP05' OR 'FK13' OR 'FK11' OR 'FN31' OR 'FN04' OR 'FK07' OR 'FL10' OR 'FL08' OR 'MP14' OR 'FL11' OR 'FL12' OR 'FJ22' OR 'FN17' OR 'FL20' OR 'FJ23' OR 'MO04' OR 'FL17') ) AND ( ( ( Subjects = ( Any Subject ) ) AND ( Text = (Any Text ) ) ) ) ) ) )")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query")
+    args = parser.parse_args()
+    main(args.query)
