@@ -1,4 +1,5 @@
 import argparse
+import re
 from time import sleep
 import urllib2
 
@@ -6,14 +7,13 @@ from lxml.html.soupparser import fromstring, unescape
 import requests
 import simplejson
 import xlsxwriter
-import re
 
 
 def setup(existing_session_id=None):
     s = requests.Session()
 
     # Make sure we're authenticated and have a session
-    s.auth = ('ehraf12', 'Abda15')
+    s.auth = ('ehraf', 'Bemba49')
     if existing_session_id:
         s.cookies['JSESSIONID'] = existing_session_id
     login_url = "http://ehrafworldcultures.yale.edu/ehrafe/"
@@ -21,7 +21,7 @@ def setup(existing_session_id=None):
     login_response = s.get(login_url)
     assert login_response.status_code == 200
 
-    sleep(0.2)
+    sleep(1)
 
     # This call seems to be necessary for future ones to work. I think it gives us some tracking cookies
     get_cookies_url = "http://ehrafworldcultures.yale.edu/ehrafe/booleanSearchSetup.do?forward=booleanForm"
@@ -29,7 +29,7 @@ def setup(existing_session_id=None):
     get_cookies_response = s.get(get_cookies_url)
     assert get_cookies_response.status_code == 200
 
-    sleep(0.2)
+    sleep(1)
 
     return s
 
@@ -41,7 +41,7 @@ def run_query(query, s):
     query_response = s.post(query_url, data=data)
     assert query_response.status_code == 200
 
-    sleep(0.2)
+    sleep(1)
 
     # This AJAX call returns the results from the previous POST, as a JSON object
     results_url = "http://ehrafworldcultures.yale.edu/ehrafe/cultureResultsAjax.do"
@@ -59,31 +59,79 @@ def hack_single_culture_result(doc):
     return doc.replace('class="topTitle" class="italics"',
                        'class="topTitle"')
 
-def get_paragraphs_for_culture(culture, s):
+def get_culture_paragraphs_page(culture, s):
     # Each culture has a url, which we fetch to tell the site we want that culture next
     culture_path = urllib2.unquote(unescape(culture['href']))
     single_culture_result_url = "http://ehrafworldcultures.yale.edu/ehrafe/" + culture_path
     print "GET {}".format(single_culture_result_url)
     prod_server_result = s.get(single_culture_result_url)
     assert prod_server_result.status_code == 200
-    sleep(0.2)
+    sleep(1)
 
     culture_code = re.search("[&\?]owc=([A-Z0-9]*)&",
                              single_culture_result_url).groups()[0]
 
-    # Now actually load the results for the culture
+    # Now actually load the results for the culture. The site already knows the one we want
     load_results_url = 'http://ehrafworldcultures.yale.edu/ehrafe/pageHitsAjax.do?&howMany=99999999'
     print "GET {}".format(load_results_url)
     single_culture_result = s.get(load_results_url)
     assert single_culture_result.status_code == 200
-    sleep(0.2)
+    sleep(1)
 
     single_culture_result_doc = hack_single_culture_result(single_culture_result.content)
 
+    print "PARSE {}".format(load_results_url)
     single_culture_result_dom = fromstring(single_culture_result_doc)
+    print "PARSED"
+    return single_culture_result_dom, culture_code
 
-    # The following XPaths extract various fields from the downloaded page. This is risky!
-    # There is litle data on the pageto help identify the paragraphs, or anything else.
+def get_document_row_info(row):
+    # For a row in the results table about a document, extract various fields
+    author = "".join(row.xpath(".//span[@class='topAuthor']/text()")).strip()
+    document_title = "".join(row.xpath(".//span[@class='topTitle']/text()")).strip()
+    document_id = "".join(row.xpath(".//button/@id")).strip()
+    permalink = "http://ehrafworldcultures.yale.edu/document?id={0}".format(document_id)
+    return author, document_title, document_id, permalink
+
+def get_document_page_info(document_id, s):
+    # For a document_id, downloads its page and extracts various fields
+    publication_url_template = "http://ehrafworldcultures.yale.edu/ehrafe/citation.do?method=citation&forward=searchFullContext&docId={}"
+    publication_url = publication_url_template.format(document_id)
+    print "GET {}".format(publication_url)
+    publication_response = s.get(publication_url)
+    sleep(1)
+    publication_dom = fromstring(publication_response.content)
+    field_date = "".join(publication_dom.xpath("//field.date/text()")).strip()
+    coverage_date = "".join(publication_dom.xpath("//date[@type='coverage']/text()")).strip()
+    subjects = publication_dom.xpath("//p[./span/text()='Subjects: ']/span/a/text()")
+    subjects = [subject.strip() for subject in subjects]
+    return field_date, coverage_date, subjects
+
+def get_citation(document_id, s):
+    # For a particular document, downloads a citation
+    citation_url_template = "http://162.220.241.148:3001/citation/{}/style/chicago-author-date"
+    citation_url = citation_url_template.format(document_id, s)
+    citation_response = s.get(citation_url)
+    sleep(1)
+    citation_json = simplejson.loads(citation_response.content)
+    # Notice the typo
+    citation_html = citation_json['bibligraphy'][1][0]
+    citation_dom = fromstring(citation_html)
+    return "".join(citation_dom.xpath(".//div[@class='csl-entry']//text()"))
+
+def get_paragraph_row_info(row):
+    # For a row in the results table representing a paragraph, extract various fields
+    top_text_node = row.xpath(".//span[@pageeid]")[0]
+    text_nodes = top_text_node.xpath("./text()|./span[@class='highlight']/text()")
+    paragraph_text = "".join(text_nodes).strip().replace('\n', ' ')
+    page_number = "".join(row.xpath(".//span[@class='pageNo']/text()")).strip()
+    section = "".join(row.xpath(".//div[@class='secTitle']/span[@class='author']/text()")).strip()
+    return paragraph_text, page_number, section
+
+
+def get_paragraphs_for_culture(culture, s):
+    single_culture_result_dom, culture_code = get_culture_paragraphs_page(culture, s)
+
     paragraphs = []
     author = None
     document_title = None
@@ -91,27 +139,12 @@ def get_paragraphs_for_culture(culture, s):
     for row in single_culture_result_dom.xpath("/html/tbody/tr"):
         if row.get('class') == 'topAuthorRow':
             # A row about a new document
-            author = "".join(row.xpath(".//span[@class='topAuthor']/text()")).strip()
-            document_title = "".join(row.xpath(".//span[@class='topTitle']/text()")).strip()
-            document_id = "".join(row.xpath(".//button/@id")).strip()
-            permalink = "http://ehrafworldcultures.yale.edu/document?id={0}".format(document_id)
-
-            publication_url_template = "http://ehrafworldcultures.yale.edu/ehrafe/citation.do?method=citation&forward=searchFullContext&docId={}"
-            publication_url = publication_url_template.format(document_id)
-            print "GET {}".format(publication_url)
-            publication_response = s.get(publication_url)
-            sleep(0.2)
-            publication_dom = fromstring(publication_response.content)
-            field_date = "".join(publication_dom.xpath("//field.date/text()")).strip()
-            coverage_date = "".join(publication_dom.xpath("//date[@type='coverage']/text()")).strip()
-            subjects = publication_dom.xpath("//p[./span/text()='Subjects: ']/span/a/text()")
-            subjects = [subject.strip() for subject in subjects]
+            author, document_title, document_id, permalink = get_document_row_info(row)
+            field_date, coverage_date, subjects = get_document_page_info(document_id, s)
+            citation = get_citation(document_id, s)
         else:
             # A row about a paragraph in the document
-            text_nodes = row.xpath(".//div[contains(@id, 'longHit')]//span[@class='p']//text()")
-            paragraph_text = "".join(text_nodes).strip().replace('\n', ' ')
-            page_number = "".join(row.xpath(".//span[@class='pageNo']/text()")).strip()
-            section = "".join(row.xpath(".//div[@class='secTitle']/span[@class='author']/text()")).strip()
+            paragraph_text, page_number, section = get_paragraph_row_info(row)
 
             new_paragraph = {
                                "text": paragraph_text,
@@ -125,7 +158,8 @@ def get_paragraphs_for_culture(culture, s):
                                "subjects": ", ".join(subjects),
                                "coverage_date": coverage_date,
                                "field_date": field_date,
-                               "permalink": permalink
+                               "permalink": permalink,
+                               "citation": citation
                                }
             print new_paragraph
             paragraphs.append(new_paragraph)
@@ -146,7 +180,8 @@ def output_results_to_xls(paragraphs):
                ("subjects", "Subjects"),
                ("coverage_date", "Coverage Date"),
                ("field_date", "Field Date"),
-               ("permalink", "Permalink"))
+               ("permalink", "Permalink"),
+               ("citation", "Citation"))
 
     for index, (_, human_readable) in enumerate(mapping):
         worksheet.write(0, index, human_readable)
