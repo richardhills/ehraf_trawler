@@ -103,9 +103,7 @@ def get_document_page_info(document_id, s):
     publication_dom = fromstring(publication_response.content)
     field_date = "".join(publication_dom.xpath("//field.date/text()")).strip()
     coverage_date = "".join(publication_dom.xpath("//date[@type='coverage']/text()")).strip()
-    subjects = publication_dom.xpath("//p[./span/text()='Subjects: ']/span/a/text()")
-    subjects = [subject.strip() for subject in subjects]
-    return field_date, coverage_date, subjects
+    return field_date, coverage_date
 
 def get_citation(document_id, s):
     # For a particular document, downloads a citation
@@ -128,8 +126,8 @@ def get_paragraph_row_info(row):
     text_nodes = top_text_node.xpath("./text()|./span[@class='highlight']/text()")
     paragraph_text = "".join(text_nodes).strip().replace('\n', ' ')
     page_number = "".join(row.xpath(".//span[@class='pageNo']/text()")).strip()
-    section = "".join(row.xpath(".//div[@class='secTitle']/span[@class='author']/text()")).strip()
-    return paragraph_text, page_number, section
+    subjects = [str(s) for s in row.xpath("td[4]/a/text()")]
+    return paragraph_text, page_number, subjects
 
 
 def get_paragraphs_for_culture(culture, s):
@@ -143,14 +141,14 @@ def get_paragraphs_for_culture(culture, s):
         if row.get('class') == 'topAuthorRow':
             # A row about a new document
             author, document_title, document_id, permalink = get_document_row_info(row)
-            field_date, coverage_date, subjects = get_document_page_info(document_id, s)
+            field_date, coverage_date = get_document_page_info(document_id, s)
             citation = get_citation(document_id, s)
         else:
             # A row about a paragraph in the document
             paragraph_info = get_paragraph_row_info(row)
             if paragraph_info is None:
                 continue
-            paragraph_text, page_number, section = paragraph_info
+            paragraph_text, page_number, subjects = paragraph_info
 
             new_paragraph = {
                                "text": paragraph_text,
@@ -158,7 +156,6 @@ def get_paragraphs_for_culture(culture, s):
                                "document_title": document_title,
                                "document_id": document_id,
                                "page_number": page_number,
-                               "section": section,
                                "culture": culture["cultureName"],
                                "culture_code": culture_code,
                                "subjects": ", ".join(subjects),
