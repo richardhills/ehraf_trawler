@@ -121,7 +121,10 @@ def get_citation(document_id, s):
 
 def get_paragraph_row_info(row):
     # For a row in the results table representing a paragraph, extract various fields
-    top_text_node = row.xpath(".//span[@pageeid]")[0]
+    top_text_nodes = row.xpath(".//span[@pageeid]")
+    if len(top_text_nodes) == 0:
+        return None
+    top_text_node = top_text_nodes[0]
     text_nodes = top_text_node.xpath("./text()|./span[@class='highlight']/text()")
     paragraph_text = "".join(text_nodes).strip().replace('\n', ' ')
     page_number = "".join(row.xpath(".//span[@class='pageNo']/text()")).strip()
@@ -144,7 +147,10 @@ def get_paragraphs_for_culture(culture, s):
             citation = get_citation(document_id, s)
         else:
             # A row about a paragraph in the document
-            paragraph_text, page_number, section = get_paragraph_row_info(row)
+            paragraph_info = get_paragraph_row_info(row)
+            if paragraph_info is None:
+                continue
+            paragraph_text, page_number, section = paragraph_info
 
             new_paragraph = {
                                "text": paragraph_text,
