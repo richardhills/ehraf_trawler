@@ -21,7 +21,7 @@ def setup(existing_session_id=None):
     login_response = s.get(login_url)
     assert login_response.status_code == 200
 
-    sleep(1)
+    sleep(2)
 
     # This call seems to be necessary for future ones to work. I think it gives us some tracking cookies
     get_cookies_url = "http://ehrafworldcultures.yale.edu/ehrafe/booleanSearchSetup.do?forward=booleanForm"
@@ -29,7 +29,7 @@ def setup(existing_session_id=None):
     get_cookies_response = s.get(get_cookies_url)
     assert get_cookies_response.status_code == 200
 
-    sleep(1)
+    sleep(2)
 
     return s
 
@@ -41,7 +41,7 @@ def run_query(query, s):
     query_response = s.post(query_url, data=data)
     assert query_response.status_code == 200
 
-    sleep(1)
+    sleep(2)
 
     # This AJAX call returns the results from the previous POST, as a JSON object
     results_url = "http://ehrafworldcultures.yale.edu/ehrafe/cultureResultsAjax.do"
@@ -66,7 +66,7 @@ def get_culture_paragraphs_page(culture, s):
     print "GET {}".format(single_culture_result_url)
     prod_server_result = s.get(single_culture_result_url)
     assert prod_server_result.status_code == 200
-    sleep(1)
+    sleep(2)
 
     culture_code = re.search("[&\?]owc=([A-Z0-9]*)&",
                              single_culture_result_url).groups()[0]
@@ -76,7 +76,7 @@ def get_culture_paragraphs_page(culture, s):
     print "GET {}".format(load_results_url)
     single_culture_result = s.get(load_results_url)
     assert single_culture_result.status_code == 200
-    sleep(1)
+    sleep(2)
 
     single_culture_result_doc = hack_single_culture_result(single_culture_result.content)
 
@@ -99,7 +99,7 @@ def get_document_page_info(document_id, s):
     publication_url = publication_url_template.format(document_id)
     print "GET {}".format(publication_url)
     publication_response = s.get(publication_url)
-    sleep(1)
+    sleep(2)
     publication_dom = fromstring(publication_response.content)
     field_date = "".join(publication_dom.xpath("//field.date/text()")).strip()
     coverage_date = "".join(publication_dom.xpath("//date[@type='coverage']/text()")).strip()
@@ -110,7 +110,7 @@ def get_citation(document_id, s):
     citation_url_template = "http://162.220.241.148:3001/citation/{}/style/chicago-author-date"
     citation_url = citation_url_template.format(document_id, s)
     citation_response = s.get(citation_url)
-    sleep(1)
+    sleep(2)
     citation_json = simplejson.loads(citation_response.content)
     # Notice the typo
     citation_html = citation_json['bibligraphy'][1][0]
@@ -169,8 +169,8 @@ def get_paragraphs_for_culture(culture, s):
 
     return paragraphs
 
-def output_results_to_xls(paragraphs):
-    workbook = xlsxwriter.Workbook('results.xlsx')
+def output_results_to_xls(paragraphs, output_file_name):
+    workbook = xlsxwriter.Workbook(output_file_name)
     worksheet = workbook.add_worksheet()
 
     mapping = (("document_id", "HRAF Document ID"),
@@ -197,7 +197,7 @@ def output_results_to_xls(paragraphs):
 
     workbook.close()
 
-def main(query, existing_session_id=None):
+def main(filename, query, existing_session_id=None):
     s = setup(existing_session_id)
 
     paragraphs = []
@@ -207,10 +207,11 @@ def main(query, existing_session_id=None):
         paragraphs_for_culture = get_paragraphs_for_culture(culture, s)
         paragraphs.extend(paragraphs_for_culture)
 
-    output_results_to_xls(paragraphs)
+    output_results_to_xls(paragraphs, filename)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("filename")
     parser.add_argument("query")
     args = parser.parse_args()
-    main(args.query)
+    main(args.filename, args.query)
