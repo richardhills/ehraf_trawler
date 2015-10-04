@@ -95,8 +95,10 @@ def get_culture_paragraphs_page(culture, s):
 
 def get_document_row_info(row):
     # For a row in the results table about a document, extract various fields
-    author = "".join(row.xpath(".//span[@class='topAuthor']/text()")).strip()
-    document_title = "".join(row.xpath(".//span[@class='topTitle']/text()")).strip()
+    author = "".join(row.xpath("./td/span[1]/text()")).strip()
+    non_span_document_title = "".join(row.xpath("./td/text()")).strip()
+    span_document_title = "".join(row.xpath("./td/span[2]/text()")).strip()
+    document_title = non_span_document_title if len(non_span_document_title) > len(span_document_title) else span_document_title
     document_id = "".join(row.xpath(".//button/@id")).strip()
     permalink = "http://ehrafworldcultures.yale.edu/document?id={0}".format(document_id)
     return author, document_title, document_id, permalink
